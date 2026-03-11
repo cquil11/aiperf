@@ -469,12 +469,6 @@ custom_dataset_loader:
       batching. Supports text, images, audio with optional timestamps or delays.
       Does NOT support multi-turn features.
 
-  wildchat:
-    class: aiperf.dataset.loader.wildchat:WildChatDatasetLoader
-    description: |
-      WildChat dataset loader for loading real multi-turn conversations from the
-      InferenceX WildChat format. Supports natural language conversations with
-      realistic turn distributions and prefix sharing patterns.
 
 # =============================================================================
 # Dataset Samplers
