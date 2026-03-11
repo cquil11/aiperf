@@ -178,11 +178,12 @@ class UserCentricStrategy(AIPerfLoggerMixin):
         self._next_user_id += 1
         sampled = self._conversation_source.next(x_correlation_id=str(user_id))
 
+        actual_turns = len(sampled.metadata.turns)
         user = User(
             user_id=user_id,
             sampled=sampled,
             next_send_time=target_perf_sec or 0.0,
-            max_turns=max_turns or len(sampled.metadata.turns),
+            max_turns=min(max_turns, actual_turns) if max_turns else actual_turns,
             order=order or 0,
         )
         self._session_to_user[user.x_correlation_id] = user

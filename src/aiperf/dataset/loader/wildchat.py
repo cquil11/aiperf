@@ -96,11 +96,6 @@ class WildChatDatasetLoader(BaseFileLoader):
             if not messages:
                 continue
 
-            # Count user turns in this conversation
-            user_turn_count = sum(1 for m in messages if m.get("role") == "user")
-            if user_turn_count < 2:
-                continue  # Skip single-turn conversations (incompatible with user-centric mode)
-
             conversation = Conversation(session_id=session_id)
 
             # Build turns: each user message = one turn, with full history as raw_messages
