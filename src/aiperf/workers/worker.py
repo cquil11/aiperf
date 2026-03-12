@@ -184,6 +184,11 @@ class Worker(BaseComponentService, ProcessHealthMixin):
 
         self.session_manager: UserSessionManager = UserSessionManager()
 
+        # Optional conversation logging (set AIPERF_LOG_CONVERSATIONS=path to enable)
+        import os
+        conv_log_path = os.environ.get("AIPERF_LOG_CONVERSATIONS")
+        self._conversation_log_file = open(conv_log_path, "a") if conv_log_path else None
+
         # Dataset client for direct data access (eliminates DatasetManager bottleneck)
         # Initialized when DatasetConfiguredNotification is received via factory
         self._dataset_client: DatasetClientStoreProtocol | None = None
@@ -494,6 +499,10 @@ class Worker(BaseComponentService, ProcessHealthMixin):
         finally:
             # Evict session on final turn OR if cancelled (no retry expected)
             if credit_context.credit.is_final_turn or credit_context.cancelled:
+                if self._conversation_log_file is not None:
+                    session = self.session_manager.get(x_correlation_id)
+                    if session is not None:
+                        self._log_conversation(session)
                 self.session_manager.evict(x_correlation_id)
 
     def _create_request_info(
@@ -616,6 +625,24 @@ class Worker(BaseComponentService, ProcessHealthMixin):
             raise ValueError(f"Failed to retrieve conversation response: {error}")
 
         return conversation_response.conversation
+
+    def _log_conversation(self, session: UserSession) -> None:
+        """Dump full conversation history (user + assistant) to JSONL."""
+        import json
+        messages = []
+        for turn in session.turn_list:
+            role = turn.role or "user"
+            text = ""
+            if turn.texts and turn.texts[0].contents:
+                text = turn.texts[0].contents[0]
+            messages.append({"role": role, "content": text[:500]})
+        record = {
+            "conversation_id": session.conversation.session_id,
+            "num_turns": session.num_turns,
+            "messages": messages,
+        }
+        self._conversation_log_file.write(json.dumps(record) + "\n")
+        self._conversation_log_file.flush()
 
     async def _process_response(self, record: RequestRecord) -> Turn | None:
         """Extract assistant response from RequestRecord and convert to Turn for session.
