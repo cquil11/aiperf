@@ -235,6 +235,11 @@ class InferenceResultParser(CommunicationMixin):
         - system_message (shared system prompt)
         - user_context_message (per-conversation user context)
         - All turns' text content
+
+        When the last turn uses raw_messages (pre-formatted OpenAI messages),
+        text content is extracted from raw_messages since turn.texts is empty
+        in that case. raw_messages on the last turn is exactly what the endpoint
+        sends to the server, so tokenizing its content gives the correct count.
         """
         turns = request_record.turns
         if turns is None:
@@ -244,6 +249,22 @@ class InferenceResultParser(CommunicationMixin):
             return None
 
         tokenizer = await self.get_tokenizer(request_record.model_name)
+
+        # If the last turn has raw_messages, extract text content from those.
+        # raw_messages is the exact prompt sent to the server and bypasses
+        # normal turn-based message construction, so turn.texts is empty.
+        last_turn = turns[-1] if turns else None
+        if last_turn and last_turn.raw_messages:
+            prompt_texts = [
+                msg["content"]
+                for msg in last_turn.raw_messages
+                if isinstance(msg.get("content"), str)
+            ]
+            if prompt_texts:
+                return await self._compute_token_count(
+                    tokenizer, prompt_texts, separator=" "
+                )
+
         prompt_texts: list[str] = []
 
         # Include system_message if present (shared system prompt)
