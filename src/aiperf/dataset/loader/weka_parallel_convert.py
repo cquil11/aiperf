@@ -56,6 +56,7 @@ class _WekaBranchDict(TypedDict):
     is_background: bool
     preceding_turn: int
     following_turn: int | None
+    start_timestamp: float | None
 
 
 class _WekaChildDict(TypedDict):
@@ -96,6 +97,7 @@ class _WekaSubagentMarkerPayload(TypedDict):
     agent_id: str
     tool_tokens: int
     system_tokens: int
+    t: float
 
 
 class _WekaParentPayload(TypedDict):
@@ -376,6 +378,7 @@ def _process_task(task: _WekaTraceTask) -> _WekaProcessTaskResult:
                 "is_background": following is None,
                 "preceding_turn": preceding,
                 "following_turn": following,
+                "start_timestamp": min(e["t"] for e in entries) * 1000.0,
             }
         )
 

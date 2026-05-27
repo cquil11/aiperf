@@ -697,6 +697,7 @@ class WekaTraceLoader(HashIdsPromptSynthesisMixin, BaseFileLoader):
                         child_conversation_ids=child_sids,
                         mode=ConversationBranchMode.SPAWN,
                         is_background=is_background,
+                        start_timestamp_ms=min(e.t for e in entries) * 1000.0,
                     )
                 )
                 conv.turns[preceding].branch_ids.append(branch_id)
@@ -740,6 +741,9 @@ class WekaTraceLoader(HashIdsPromptSynthesisMixin, BaseFileLoader):
             child_conv = Conversation(
                 session_id=cp.session_id,
                 context_mode=self._resolved_context_mode(),
+                is_root=False,
+                agent_depth=1,
+                parent_conversation_id=cp.parent_trace_id,
             )
             for k, creq in enumerate(cp.entry.requests):
                 seed = f"{cp.session_id}:turn_{k}:partial_tail"
@@ -877,6 +881,7 @@ class WekaTraceLoader(HashIdsPromptSynthesisMixin, BaseFileLoader):
                         "agent_id": sa.agent_id,
                         "tool_tokens": sa.tool_tokens,
                         "system_tokens": sa.system_tokens,
+                        "t": sa.t,
                     },
                 )
                 for outer_idx, sa in plan.subagents
@@ -965,6 +970,7 @@ class WekaTraceLoader(HashIdsPromptSynthesisMixin, BaseFileLoader):
                         child_conversation_ids=branch["child_session_ids"],
                         mode=ConversationBranchMode.SPAWN,
                         is_background=branch["is_background"],
+                        start_timestamp_ms=branch.get("start_timestamp"),
                     )
                 )
                 parent_conv.turns[branch["preceding_turn"]].branch_ids.append(
@@ -985,6 +991,9 @@ class WekaTraceLoader(HashIdsPromptSynthesisMixin, BaseFileLoader):
                 child_conv = Conversation(
                     session_id=child["session_id"],
                     context_mode=self._resolved_context_mode(),
+                    is_root=False,
+                    agent_depth=1,
+                    parent_conversation_id=trace_id,
                 )
                 for t_dict in child["turns"]:
                     child_conv.turns.append(

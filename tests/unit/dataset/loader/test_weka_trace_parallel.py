@@ -163,6 +163,7 @@ def _drive_parallel_inproc(
                         "agent_id": sa.agent_id,
                         "tool_tokens": sa.tool_tokens,
                         "system_tokens": sa.system_tokens,
+                        "t": sa.t,
                     },
                 )
                 for outer_idx, sa in plan.subagents
