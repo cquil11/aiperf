@@ -1005,6 +1005,7 @@ class Worker(BaseComponentService, ProcessHealthMixin):
             turns = session.turn_list if session else []
         turns, payload_bytes = self._add_dynamo_session_control(
             credit=credit,
+            x_request_id=x_request_id,
             turns=turns,
             payload_bytes=payload_bytes,
         )
@@ -1041,6 +1042,7 @@ class Worker(BaseComponentService, ProcessHealthMixin):
         self,
         *,
         credit: Credit,
+        x_request_id: str,
         turns: list[Turn],
         payload_bytes: bytes | None,
     ) -> tuple[list[Turn], bytes | None]:
@@ -1062,6 +1064,7 @@ class Worker(BaseComponentService, ProcessHealthMixin):
             payload = self._merge_dynamo_session_control(payload, session_control)
             self._maybe_log_dynamo_session_sample(
                 credit=credit,
+                x_request_id=x_request_id,
                 session_control=session_control,
                 source="payload_bytes",
                 payload=payload,
@@ -1094,6 +1097,7 @@ class Worker(BaseComponentService, ProcessHealthMixin):
         new_turns[-1] = last_turn.model_copy(update=updates)
         self._maybe_log_dynamo_session_sample(
             credit=credit,
+            x_request_id=x_request_id,
             session_control=session_control,
             source="raw_payload" if payload_for_debug is not None else "extra_body",
             payload=payload_for_debug,
@@ -1144,6 +1148,7 @@ class Worker(BaseComponentService, ProcessHealthMixin):
         self,
         *,
         credit: Credit,
+        x_request_id: str,
         session_control: dict[str, Any],
         source: str,
         payload: dict[str, Any] | None = None,
@@ -1164,9 +1169,14 @@ class Worker(BaseComponentService, ProcessHealthMixin):
         summary: dict[str, Any] = {
             "service_id": self.service_id,
             "source": source,
+            "credit_id": credit.id,
             "credit_phase": str(credit.phase),
+            "x_request_id": x_request_id,
             "conversation_id": credit.conversation_id,
             "turn_index": credit.turn_index,
+            "num_turns": credit.num_turns,
+            "is_final_turn": credit.is_final_turn,
+            "agent_depth": credit.agent_depth,
             "x_correlation_id": credit.x_correlation_id,
             "parent_correlation_id": credit.parent_correlation_id,
             "cache_bust_marker": (credit.cache_bust_marker or "").strip() or None,
