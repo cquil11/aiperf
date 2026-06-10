@@ -817,6 +817,23 @@ class TestCacheBustFieldsPropagation:
         assert sent_credit.cache_bust_marker is None
         assert sent_credit.cache_bust_target == CacheBustTarget.NONE
 
+    async def test_credit_inherits_dynamo_session_bind_from_turn(
+        self, credit_issuer, mock_router
+    ):
+        """Credit must carry explicit Dynamo bind state from TurnToSend."""
+        turn = TurnToSend(
+            conversation_id="conv1",
+            x_correlation_id="corr-conv1",
+            turn_index=0,
+            num_turns=1,
+            dynamo_session_bind=True,
+        )
+
+        await credit_issuer.issue_credit(turn)
+
+        sent_credit = mock_router.send_credit.call_args.kwargs["credit"]
+        assert sent_credit.dynamo_session_bind is True
+
 
 # =============================================================================
 # Test: dispatch_first_turn / dispatch_join_turn

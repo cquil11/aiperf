@@ -74,6 +74,15 @@ class Credit(
     cache_bust_target: CacheBustTarget = CacheBustTarget.NONE
     """Where (and how) to inject `cache_bust_marker` at request-build time."""
 
+    dynamo_session_bind: bool | None = None
+    """Explicit Dynamo session bind control.
+
+    ``True`` emits ``nvext.session_control.action=bind``; ``False`` omits the
+    action for an already-bound logical session; ``None`` leaves legacy worker
+    fallback behavior in place for timing strategies that do not model Dynamo
+    session lifecycles.
+    """
+
     @property
     def is_final_turn(self) -> bool:
         return self.turn_index == self.num_turns - 1
@@ -134,6 +143,9 @@ class TurnToSend(Struct, frozen=True):
     cache_bust_target: CacheBustTarget = CacheBustTarget.NONE
     """Where (and how) to inject `cache_bust_marker` at request-build time."""
 
+    dynamo_session_bind: bool | None = None
+    """Explicit Dynamo session bind control passed through to ``Credit``."""
+
     @property
     def is_final_turn(self) -> bool:
         return self.turn_index == self.num_turns - 1
@@ -162,4 +174,7 @@ class TurnToSend(Struct, frozen=True):
             branch_mode=credit.branch_mode,
             cache_bust_marker=credit.cache_bust_marker,
             cache_bust_target=credit.cache_bust_target,
+            dynamo_session_bind=(
+                False if credit.dynamo_session_bind is not None else None
+            ),
         )

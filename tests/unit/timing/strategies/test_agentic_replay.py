@@ -997,6 +997,8 @@ async def test_warmup_session_marker_reused_in_profile_resume():
     )
     assert warmup_turns[0].cache_bust_target == CacheBustTarget.SYSTEM_PREFIX
     assert profile_turns[0].cache_bust_target == CacheBustTarget.SYSTEM_PREFIX
+    assert warmup_turns[0].dynamo_session_bind is True
+    assert profile_turns[0].dynamo_session_bind is False
 
 
 @pytest.mark.asyncio
@@ -1043,6 +1045,8 @@ async def test_recycle_increments_pass_and_rotates_marker():
     recycled_rid = _extract_rid(issued_turns[1].cache_bust_marker)
     assert recycled_rid is not None
     assert recycled_rid != initial_rid
+    assert issued_turns[0].dynamo_session_bind is False
+    assert issued_turns[1].dynamo_session_bind is True
 
 
 @pytest.mark.asyncio

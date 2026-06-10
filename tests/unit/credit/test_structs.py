@@ -25,17 +25,20 @@ def test_credit_default_cache_bust_fields():
     credit = _make_credit()
     assert credit.cache_bust_marker is None
     assert credit.cache_bust_target == CacheBustTarget.NONE
+    assert credit.dynamo_session_bind is None
 
 
 def test_credit_cache_bust_roundtrip():
     credit = _make_credit(
         cache_bust_marker="\n\n[rid:abc123]",
         cache_bust_target=CacheBustTarget.SYSTEM_SUFFIX,
+        dynamo_session_bind=True,
     )
     encoded = msgspec.msgpack.encode(credit)
     decoded = msgspec.msgpack.decode(encoded, type=Credit)
     assert decoded.cache_bust_marker == "\n\n[rid:abc123]"
     assert decoded.cache_bust_target == CacheBustTarget.SYSTEM_SUFFIX
+    assert decoded.dynamo_session_bind is True
 
 
 def test_credit_omit_defaults_keeps_wire_flat_when_disabled():
@@ -55,8 +58,10 @@ def test_turn_to_send_from_previous_credit_propagates_cache_bust():
     parent = _make_credit(
         cache_bust_marker="[rid:abc123]\n\n",
         cache_bust_target=CacheBustTarget.SYSTEM_PREFIX,
+        dynamo_session_bind=True,
     )
     next_turn = TurnToSend.from_previous_credit(parent)
     assert next_turn.cache_bust_marker == "[rid:abc123]\n\n"
     assert next_turn.cache_bust_target == CacheBustTarget.SYSTEM_PREFIX
+    assert next_turn.dynamo_session_bind is False
     assert next_turn.turn_index == parent.turn_index + 1

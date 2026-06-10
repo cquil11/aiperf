@@ -43,6 +43,8 @@ class SampledSession:
             (e.g. AgenticReplayStrategy._build_turn_for_session) instead.
         cache_bust_target: Where to inject the marker. Mirrors the CLI knob;
             NONE when the feature is disabled.
+        dynamo_session_bind: Optional explicit Dynamo bind action for the
+            first request built from this sampled session.
     """
 
     conversation_id: str
@@ -54,6 +56,7 @@ class SampledSession:
     start_turn_index: int = 0
     cache_bust_marker: str | None = None
     cache_bust_target: CacheBustTarget = CacheBustTarget.NONE
+    dynamo_session_bind: bool | None = None
 
     @property
     def routing_key(self) -> str:
@@ -80,6 +83,7 @@ class SampledSession:
             branch_mode=self.branch_mode,
             cache_bust_marker=self.cache_bust_marker,
             cache_bust_target=self.cache_bust_target,
+            dynamo_session_bind=self.dynamo_session_bind,
         )
 
     def build_turn_at_index(self, turn_index: int) -> TurnToSend:
@@ -108,6 +112,7 @@ class SampledSession:
             parent_correlation_id=self.parent_correlation_id,
             has_forks=meta.has_forks if meta is not None else False,
             branch_mode=self.branch_mode,
+            dynamo_session_bind=self.dynamo_session_bind,
         )
 
 
@@ -155,6 +160,7 @@ class ConversationSource:
         branch_mode: ConversationBranchMode = ConversationBranchMode.FORK,
         cache_bust_marker: str | None = None,
         cache_bust_target: CacheBustTarget = CacheBustTarget.NONE,
+        dynamo_session_bind: bool | None = None,
     ) -> SampledSession:
         """Build a SampledSession for a DAG child conversation.
 
@@ -180,6 +186,7 @@ class ConversationSource:
             branch_mode=branch_mode,
             cache_bust_marker=cache_bust_marker,
             cache_bust_target=cache_bust_target,
+            dynamo_session_bind=dynamo_session_bind,
         )
 
     def start_pre_session_child(
@@ -187,6 +194,7 @@ class ConversationSource:
         child_conversation_id: str,
         cache_bust_marker: str | None = None,
         cache_bust_target: CacheBustTarget = CacheBustTarget.NONE,
+        dynamo_session_bind: bool | None = None,
     ) -> SampledSession:
         """Build a SampledSession for a pre-session (turn-0) background SPAWN child.
 
@@ -215,6 +223,7 @@ class ConversationSource:
             branch_mode=ConversationBranchMode.SPAWN,
             cache_bust_marker=cache_bust_marker,
             cache_bust_target=cache_bust_target,
+            dynamo_session_bind=dynamo_session_bind,
         )
 
     def get_metadata(self, conversation_id: str) -> ConversationMetadata:

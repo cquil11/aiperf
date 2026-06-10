@@ -366,6 +366,7 @@ class BranchOrchestrator:
                             child_cid,
                             cache_bust_marker=self._mint_child_marker(child_cid),
                             cache_bust_target=self._cache_bust_target,
+                            dynamo_session_bind=True,
                         )
                     except Exception:
                         logger.exception(
@@ -432,9 +433,9 @@ class BranchOrchestrator:
                         parent_state=parent_state,
                         parent_meta=parent_meta,
                         gated_idx=child_state.join_target_turn_index,
-                        cache_bust_marker=(
-                            cache_bust_markers or {}
-                        ).get(parent_state.x_correlation_id),
+                        cache_bust_marker=(cache_bust_markers or {}).get(
+                            parent_state.x_correlation_id
+                        ),
                     )
                     prereq_state = pending.outstanding.setdefault(
                         prereq_key, PrereqState()
@@ -606,13 +607,18 @@ class BranchOrchestrator:
 
             for child_conv_id in branch.child_conversation_ids:
                 try:
+                    child_marker = self._mint_child_marker(child_conv_id)
                     child = self._cs.start_branch_child(
                         parent_correlation_id=parent_corr,
                         child_conversation_id=child_conv_id,
                         agent_depth=parent_depth + 1,
                         branch_mode=branch.mode,
-                        cache_bust_marker=self._mint_child_marker(child_conv_id),
+                        cache_bust_marker=child_marker,
                         cache_bust_target=self._cache_bust_target,
+                        dynamo_session_bind=(
+                            branch.mode == ConversationBranchMode.SPAWN
+                            or child_marker is not None
+                        ),
                     )
                 except Exception:
                     logger.exception("start_branch_child failed for %s", child_conv_id)

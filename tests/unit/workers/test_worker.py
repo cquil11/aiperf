@@ -34,6 +34,7 @@ def _make_credit(
     turn_index: int = 0,
     phase: CreditPhase = CreditPhase.PROFILING,
     cache_bust_marker: str | None = None,
+    dynamo_session_bind: bool | None = None,
 ) -> Credit:
     return Credit(
         id=1,
@@ -49,6 +50,7 @@ def _make_credit(
             if cache_bust_marker
             else CacheBustTarget.NONE
         ),
+        dynamo_session_bind=dynamo_session_bind,
     )
 
 
@@ -209,6 +211,7 @@ class TestWorker:
             turn_index=3,
             phase=CreditPhase.WARMUP,
             cache_bust_marker=marker,
+            dynamo_session_bind=True,
         )
         warmup_request = mock_worker._create_request_info(
             x_request_id="req-warmup",
@@ -224,7 +227,9 @@ class TestWorker:
             turn_index=4,
             phase=CreditPhase.PROFILING,
             cache_bust_marker=marker,
+            dynamo_session_bind=False,
         )
+        mock_worker._dynamo_bound_session_ids.clear()
         profile_request = mock_worker._create_request_info(
             x_request_id="req-profile",
             credit_context=_make_credit_context(profile_credit),

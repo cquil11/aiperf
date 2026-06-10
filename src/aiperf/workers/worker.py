@@ -19,6 +19,7 @@ from aiperf.common.enums import (
     CacheBustTarget,
     CommAddress,
     CommandType,
+    CreditPhase,
     MemoryMapFormat,
     MessageType,
 )
@@ -95,6 +96,10 @@ def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
     except ValueError:
         _logger.warning(f"Ignoring invalid integer env {name}={raw!r}")
         return default
+
+
+def _phase_debug_sample_env_name(phase: CreditPhase) -> str:
+    return f"AIPERF_DYNAMO_SESSION_DEBUG_SAMPLES_{phase.value.upper()}"
 
 
 def _apply_cache_bust_to_system_message(
@@ -500,14 +505,20 @@ class Worker(BaseComponentService, ProcessHealthMixin):
         # high concurrency — the misconfiguration is the same for every credit.
         self._cache_bust_warning_shown: bool = False
 
-        # Dynamo session_control bind is a one-time action per stable session id.
-        # Keep this separate from UserSession eviction so warmup can prime a
-        # Dynamo sticky route that profiling reuses with the same cache-bust id.
+        # Legacy fallback for timing strategies that do not explicitly model
+        # Dynamo session lifecycle in Credit.dynamo_session_bind.
         self._dynamo_bound_session_ids: set[str] = set()
         self._dynamo_debug_samples_remaining: int = _env_int(
             "AIPERF_DYNAMO_SESSION_DEBUG_SAMPLES",
             0,
         )
+        self._dynamo_debug_samples_remaining_by_phase: dict[CreditPhase, int] = {
+            phase: _env_int(
+                _phase_debug_sample_env_name(phase),
+                0,
+            )
+            for phase in CreditPhase
+        }
         self._dynamo_debug_chars: int = _env_int(
             "AIPERF_DYNAMO_SESSION_DEBUG_CHARS",
             160,
@@ -1097,7 +1108,11 @@ class Worker(BaseComponentService, ProcessHealthMixin):
             "session_id": session_id,
             "timeout": self.model_endpoint.endpoint.dynamo_session_timeout_seconds,
         }
-        if session_id not in self._dynamo_bound_session_ids:
+        should_bind = credit.dynamo_session_bind is True or (
+            credit.dynamo_session_bind is None
+            and session_id not in self._dynamo_bound_session_ids
+        )
+        if should_bind:
             session_control["action"] = "bind"
         return session_control
 
@@ -1134,9 +1149,18 @@ class Worker(BaseComponentService, ProcessHealthMixin):
         payload: dict[str, Any] | None = None,
         turns: list[Turn] | None = None,
     ) -> None:
-        if self._dynamo_debug_samples_remaining <= 0:
+        phase_samples_remaining = self._dynamo_debug_samples_remaining_by_phase.get(
+            credit.phase,
+            0,
+        )
+        if phase_samples_remaining > 0:
+            self._dynamo_debug_samples_remaining_by_phase[credit.phase] = (
+                phase_samples_remaining - 1
+            )
+        elif self._dynamo_debug_samples_remaining > 0:
+            self._dynamo_debug_samples_remaining -= 1
+        else:
             return
-        self._dynamo_debug_samples_remaining -= 1
         summary: dict[str, Any] = {
             "service_id": self.service_id,
             "source": source,
@@ -1146,12 +1170,22 @@ class Worker(BaseComponentService, ProcessHealthMixin):
             "x_correlation_id": credit.x_correlation_id,
             "parent_correlation_id": credit.parent_correlation_id,
             "cache_bust_marker": (credit.cache_bust_marker or "").strip() or None,
+            "dynamo_session_bind": credit.dynamo_session_bind,
             "session_control": session_control,
         }
+        marker = (credit.cache_bust_marker or "").strip()
         if payload is not None:
             summary["payload"] = self._summarize_payload_messages(payload)
+            summary["cache_bust_marker_hits"] = self._count_marker_hits_in_payload(
+                payload,
+                marker,
+            )
         elif turns is not None:
             summary["turns"] = self._summarize_turns(turns)
+            summary["cache_bust_marker_hits"] = self._count_marker_hits_in_turns(
+                turns,
+                marker,
+            )
         self.info(lambda: "DYNAMO_SESSION_SAMPLE " + orjson.dumps(summary).decode())
 
     def _summarize_payload_messages(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1183,6 +1217,53 @@ class Worker(BaseComponentService, ProcessHealthMixin):
             "message_count": len(messages),
             "messages": self._summarize_messages(messages),
         }
+
+    def _count_marker_hits_in_payload(
+        self,
+        payload: dict[str, Any],
+        marker: str,
+    ) -> dict[str, Any]:
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            messages = payload.get("input")
+        if not isinstance(messages, list):
+            return {"marker": marker or None, "count": 0, "indices": []}
+        return self._count_marker_hits_in_messages(messages, marker)
+
+    def _count_marker_hits_in_turns(
+        self,
+        turns: list[Turn],
+        marker: str,
+    ) -> dict[str, Any]:
+        messages: list[dict[str, Any]] = []
+        for turn in turns:
+            if turn.raw_messages is not None:
+                messages.extend(turn.raw_messages)
+                continue
+            text = "\n".join(
+                content
+                for text_item in turn.texts
+                for content in text_item.contents
+                if content
+            )
+            messages.append({"role": turn.role or "user", "content": text})
+        return self._count_marker_hits_in_messages(messages, marker)
+
+    def _count_marker_hits_in_messages(
+        self,
+        messages: list[Any],
+        marker: str,
+    ) -> dict[str, Any]:
+        if not marker:
+            return {"marker": None, "count": 0, "indices": []}
+
+        indices: list[int] = []
+        for idx, message in enumerate(messages):
+            if not isinstance(message, dict):
+                continue
+            if marker in self._message_text(message):
+                indices.append(idx)
+        return {"marker": marker, "count": len(indices), "indices": indices[:8]}
 
     def _summarize_messages(self, messages: list[Any]) -> list[dict[str, Any]]:
         sample_indices = list(range(min(2, len(messages))))

@@ -238,7 +238,11 @@ class AgenticReplayStrategy(AIPerfLoggerMixin):
                 self._mint_marker_for_session(
                     session.x_correlation_id, trajectory.conversation_id, lane
                 )
-                turn = self._build_turn_for_session(session, dispatch_index)
+                turn = self._build_turn_for_session(
+                    session,
+                    dispatch_index,
+                    dynamo_session_bind=True,
+                )
                 self._record_warmup_turn(turn.x_correlation_id, session, dispatch_index)
                 await self.credit_issuer.issue_credit(turn)
                 continue
@@ -252,7 +256,11 @@ class AgenticReplayStrategy(AIPerfLoggerMixin):
                 self._mint_marker_for_session(
                     session.x_correlation_id, state.conversation_id, lane
                 )
-                turn = self._build_turn_for_session(session, state.next_turn_index)
+                turn = self._build_turn_for_session(
+                    session,
+                    state.next_turn_index,
+                    dynamo_session_bind=True,
+                )
                 self._record_warmup_turn(
                     turn.x_correlation_id, session, state.next_turn_index
                 )
@@ -308,7 +316,11 @@ class AgenticReplayStrategy(AIPerfLoggerMixin):
                 )
                 continue
 
-            turn = self._build_turn_for_session(session, resume_index)
+            turn = self._build_turn_for_session(
+                session,
+                resume_index,
+                dynamo_session_bind=False,
+            )
             await self.credit_issuer.issue_credit(turn)
 
     async def handle_credit_return(
@@ -378,9 +390,7 @@ class AgenticReplayStrategy(AIPerfLoggerMixin):
                 await self._dispatch_next_turn(credit)
                 return
             if terminal_overflow and self.branch_orchestrator is not None:
-                await self.branch_orchestrator.on_child_stopped(
-                    credit.x_correlation_id
-                )
+                await self.branch_orchestrator.on_child_stopped(credit.x_correlation_id)
             self._session_marker.pop(credit.x_correlation_id, None)
             self._correlation_to_lane.pop(credit.x_correlation_id, None)
             return
@@ -476,7 +486,11 @@ class AgenticReplayStrategy(AIPerfLoggerMixin):
         self._active_traces[next_trace_id] += 1
         self._mint_marker_for_session(session.x_correlation_id, next_trace_id, lane)
 
-        turn = self._build_turn_for_session(session, 0)
+        turn = self._build_turn_for_session(
+            session,
+            0,
+            dynamo_session_bind=True,
+        )
         await self.credit_issuer.issue_credit(turn)
 
     def _record_warmup_turn(
@@ -514,7 +528,11 @@ class AgenticReplayStrategy(AIPerfLoggerMixin):
                 continue
 
             session = self.conversation_source.session_for_state(state)
-            turn = self._build_turn_for_session(session, state.next_turn_index)
+            turn = self._build_turn_for_session(
+                session,
+                state.next_turn_index,
+                dynamo_session_bind=False,
+            )
             delay_s = state.next_dispatch_offset_ms / MILLIS_PER_SECOND
             if delay_s > 0:
                 self.scheduler.schedule_later(
@@ -616,18 +634,21 @@ class AgenticReplayStrategy(AIPerfLoggerMixin):
         )
 
     def _build_turn_for_session(
-        self, session: SampledSession, turn_index: int
+        self,
+        session: SampledSession,
+        turn_index: int,
+        *,
+        dynamo_session_bind: bool,
     ) -> TurnToSend:
         """Build a TurnToSend for the given session at the given turn index."""
         base = session.build_turn_at_index(turn_index)
         marker = self._session_marker.get(session.x_correlation_id)
+        updates: dict[str, object] = {"dynamo_session_bind": dynamo_session_bind}
         if marker is None and self._cache_bust_target == CacheBustTarget.NONE:
-            return base
-        return _struct_replace(
-            base,
-            cache_bust_marker=marker,
-            cache_bust_target=self._cache_bust_target,
-        )
+            return _struct_replace(base, **updates)
+        updates["cache_bust_marker"] = marker
+        updates["cache_bust_target"] = self._cache_bust_target
+        return _struct_replace(base, **updates)
 
     def _mint_marker_for_session(
         self, x_correlation_id: str, trace_id: str, trajectory_index: int

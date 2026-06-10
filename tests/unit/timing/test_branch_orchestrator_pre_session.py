@@ -125,7 +125,10 @@ async def test_pre_session_background_spawn_dispatches_before_turn_0():
     await orch.dispatch_pre_session_branches()
 
     cs.start_pre_session_child.assert_called_once_with(
-        "early", cache_bust_marker=None, cache_bust_target=CacheBustTarget.NONE
+        "early",
+        cache_bust_marker=None,
+        cache_bust_target=CacheBustTarget.NONE,
+        dynamo_session_bind=True,
     )
     issuer.dispatch_first_turn.assert_awaited_once()
     # Parent has NOT had any credit; no branch_child dispatch happened.
@@ -201,7 +204,10 @@ async def test_mixed_pre_and_post_branches_on_turn_0_no_double_dispatch():
     await orch.dispatch_pre_session_branches()
     assert cs.start_pre_session_child.call_count == 1
     cs.start_pre_session_child.assert_called_once_with(
-        "early", cache_bust_marker=None, cache_bust_target=CacheBustTarget.NONE
+        "early",
+        cache_bust_marker=None,
+        cache_bust_target=CacheBustTarget.NONE,
+        dynamo_session_bind=True,
     )
     assert issuer.dispatch_first_turn.await_count == 1
 

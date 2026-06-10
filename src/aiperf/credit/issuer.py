@@ -262,6 +262,7 @@ class CreditIssuer:
             branch_mode=turn.branch_mode,
             cache_bust_marker=turn.cache_bust_marker,
             cache_bust_target=turn.cache_bust_target,
+            dynamo_session_bind=turn.dynamo_session_bind,
         )
 
         await self._credit_router.send_credit(credit=credit)
@@ -352,6 +353,7 @@ class CreditIssuer:
             branch_mode=pending.parent_branch_mode,
             cache_bust_marker=pending.parent_cache_bust_marker,
             cache_bust_target=pending.parent_cache_bust_target,
+            dynamo_session_bind=False,
         )
         result = await self.try_issue_credit(turn)
         return result is True
