@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import os
 import time
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -82,6 +84,17 @@ if TYPE_CHECKING:
 
 
 _logger = AIPerfLogger(__name__)
+
+
+def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return max(minimum, int(raw))
+    except ValueError:
+        _logger.warning(f"Ignoring invalid integer env {name}={raw!r}")
+        return default
 
 
 def _apply_cache_bust_to_system_message(
@@ -464,6 +477,15 @@ class Worker(BaseComponentService, ProcessHealthMixin):
         # Keep this separate from UserSession eviction so warmup can prime a
         # Dynamo sticky route that profiling reuses with the same cache-bust id.
         self._dynamo_bound_session_ids: set[str] = set()
+        self._dynamo_debug_samples_remaining: int = _env_int(
+            "AIPERF_DYNAMO_SESSION_DEBUG_SAMPLES",
+            0,
+        )
+        self._dynamo_debug_chars: int = _env_int(
+            "AIPERF_DYNAMO_SESSION_DEBUG_CHARS",
+            160,
+            minimum=16,
+        )
 
         # Only used as a fallback when dataset client is not initialized
         # or was not available when the credit was dropped. Must be created here
@@ -1000,6 +1022,12 @@ class Worker(BaseComponentService, ProcessHealthMixin):
             if not isinstance(payload, dict):
                 raise ValueError("Dynamo session_control requires object payload_bytes")
             payload = self._merge_dynamo_session_control(payload, session_control)
+            self._maybe_log_dynamo_session_sample(
+                credit=credit,
+                session_control=session_control,
+                source="payload_bytes",
+                payload=payload,
+            )
             self._dynamo_bound_session_ids.add(session_control["session_id"])
             return turns, orjson.dumps(payload)
 
@@ -1009,12 +1037,12 @@ class Worker(BaseComponentService, ProcessHealthMixin):
         last_turn = turns[-1]
         updates: dict[str, Any]
         if last_turn.raw_payload is not None:
-            updates = {
-                "raw_payload": self._merge_dynamo_session_control(
-                    last_turn.raw_payload,
-                    session_control,
-                )
-            }
+            raw_payload = self._merge_dynamo_session_control(
+                last_turn.raw_payload,
+                session_control,
+            )
+            updates = {"raw_payload": raw_payload}
+            payload_for_debug = raw_payload
         else:
             updates = {
                 "extra_body": self._merge_dynamo_session_control(
@@ -1022,9 +1050,17 @@ class Worker(BaseComponentService, ProcessHealthMixin):
                     session_control,
                 )
             }
+            payload_for_debug = None
 
         new_turns = list(turns)
         new_turns[-1] = last_turn.model_copy(update=updates)
+        self._maybe_log_dynamo_session_sample(
+            credit=credit,
+            session_control=session_control,
+            source="raw_payload" if payload_for_debug is not None else "extra_body",
+            payload=payload_for_debug,
+            turns=new_turns if payload_for_debug is None else None,
+        )
         self._dynamo_bound_session_ids.add(session_control["session_id"])
         return new_turns, payload_bytes
 
@@ -1061,6 +1097,111 @@ class Worker(BaseComponentService, ProcessHealthMixin):
         nvext["session_control"] = merged_session_control
         merged["nvext"] = nvext
         return merged
+
+    def _maybe_log_dynamo_session_sample(
+        self,
+        *,
+        credit: Credit,
+        session_control: dict[str, Any],
+        source: str,
+        payload: dict[str, Any] | None = None,
+        turns: list[Turn] | None = None,
+    ) -> None:
+        if self._dynamo_debug_samples_remaining <= 0:
+            return
+        self._dynamo_debug_samples_remaining -= 1
+        summary: dict[str, Any] = {
+            "service_id": self.service_id,
+            "source": source,
+            "credit_phase": str(credit.phase),
+            "conversation_id": credit.conversation_id,
+            "turn_index": credit.turn_index,
+            "x_correlation_id": credit.x_correlation_id,
+            "parent_correlation_id": credit.parent_correlation_id,
+            "cache_bust_marker": (credit.cache_bust_marker or "").strip() or None,
+            "session_control": session_control,
+        }
+        if payload is not None:
+            summary["payload"] = self._summarize_payload_messages(payload)
+        elif turns is not None:
+            summary["turns"] = self._summarize_turns(turns)
+        self.info(lambda: "DYNAMO_SESSION_SAMPLE " + orjson.dumps(summary).decode())
+
+    def _summarize_payload_messages(self, payload: dict[str, Any]) -> dict[str, Any]:
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            messages = payload.get("input")
+        if not isinstance(messages, list):
+            return {"message_count": 0, "shape": sorted(str(k) for k in payload)}
+        return {
+            "message_count": len(messages),
+            "messages": self._summarize_messages(messages),
+        }
+
+    def _summarize_turns(self, turns: list[Turn]) -> dict[str, Any]:
+        messages: list[dict[str, Any]] = []
+        for turn in turns:
+            if turn.raw_messages is not None:
+                messages.extend(turn.raw_messages)
+                continue
+            text = "\n".join(
+                content
+                for text_item in turn.texts
+                for content in text_item.contents
+                if content
+            )
+            messages.append({"role": turn.role or "user", "content": text})
+        return {
+            "turn_count": len(turns),
+            "message_count": len(messages),
+            "messages": self._summarize_messages(messages),
+        }
+
+    def _summarize_messages(self, messages: list[Any]) -> list[dict[str, Any]]:
+        sample_indices = list(range(min(2, len(messages))))
+        tail_start = max(len(messages) - 2, 0)
+        for idx in range(tail_start, len(messages)):
+            if idx not in sample_indices:
+                sample_indices.append(idx)
+
+        summaries: list[dict[str, Any]] = []
+        for idx in sample_indices:
+            message = messages[idx]
+            if not isinstance(message, dict):
+                summaries.append({"index": idx, "type": type(message).__name__})
+                continue
+            text = self._message_text(message)
+            summaries.append(
+                {
+                    "index": idx,
+                    "role": message.get("role"),
+                    "text": self._text_digest(text),
+                }
+            )
+        return summaries
+
+    @staticmethod
+    def _message_text(message: dict[str, Any]) -> str:
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                value = part.get("text") or part.get("content")
+                if isinstance(value, str):
+                    parts.append(value)
+            return "\n".join(parts)
+        return ""
+
+    def _text_digest(self, text: str) -> dict[str, Any]:
+        return {
+            "chars": len(text),
+            "sha1_16": hashlib.sha1(text.encode("utf-8")).hexdigest()[:16],
+            "prefix": text[: self._dynamo_debug_chars].replace("\n", "\\n"),
+        }
 
     async def _retrieve_conversation(
         self,
